@@ -1,0 +1,1275 @@
+#include "debug.h"
+#include "screen.h"
+#include "timer.h"
+#include "keyboard.h"
+#include "sound.h"
+#include "digplay.h"
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+#include "settings.h"
+#include <fstream.h>
+
+#include <stdlib.h>
+#include "midpak2.h"
+
+//переназначение-клавишь
+//выбор готовой гаммы например только черные
+
+void GetRealTimeClock(unsigned char &hour, unsigned char &min, unsigned char &sec);
+
+void music(int n, int seq=0);
+
+double Volume=0.4;
+
+extern SETTINGS Settings;
+
+extern ifstream ifl;
+char r[256], g[256], b[256];
+
+#define STROY_24	 	2
+#define STROY_PIANO 	1
+#define STROY_NATURAL	0
+
+const FREQ=22050;
+
+struct FUNCTIONAL_KEY
+{
+	int ID;
+	char * help;
+	char ScanCode;
+	char ScanCode2;
+};
+
+enum{
+	F_VOLUME_SUB=0,
+	F_VOLUME_ADD,
+	F_BASEFREQ_INPUT,
+	F_BASEFREQ_SUB,
+	F_BASEFREQ_ADD,
+	F_DECREMENT_SUB,
+	F_DECREMENT_ADD,
+	F_TIMER_SUB,
+	F_TIMER_ADD,
+	F_CHANGE_TABLE,
+
+	F_SHOW_HIDE_DEBUG,
+	F_STROY,
+	F_HELP,
+	F_START_RECORD,
+	F_STOP,
+	F_PLAY_RECORD,
+	F_EXIT
+};
+
+FUNCTIONAL_KEY functional_keys[]=
+{
+//	{F_BASEFREQ_INPUT, "Ввод базовой частоты",KEY_F8},
+	{F_HELP, "Помощь",						KEY_F1},
+	{F_START_RECORD, "Запись ",				KEY_F2},
+	{F_STOP, "Остановка ",		KEY_F3},
+	{F_PLAY_RECORD, "Проиграть записанное ",	KEY_F4},
+	{F_TIMER_SUB, "-- частоты таймера",	KEY_F5},
+	{F_TIMER_ADD, "++ частоты таймера",	KEY_F6},
+
+	{F_BASEFREQ_SUB, "-- базовой частоты",	KEY_PADSUB,KEY_LEFTCTRL},
+	{F_BASEFREQ_ADD, "++ базовой частоты",	KEY_PADADD,KEY_LEFTCTRL},
+
+	{F_STROY, "Изменение строя (нат./равн./24 пол)",KEY_F7},
+	{F_CHANGE_TABLE, "Изменение таблицы (полутона/пентатоника)",KEY_F8},
+
+	{F_VOLUME_SUB, "-- общей громкости",	KEY_F9},
+	{F_VOLUME_ADD, "++ общей громкости",	KEY_F10},
+
+	{F_DECREMENT_SUB, "-- декремента",		KEY_F11},
+	{F_DECREMENT_ADD, "++ декремента",		KEY_F12},
+
+	{F_SHOW_HIDE_DEBUG,"Показать/скрыть отладочную информацию",KEY_LEFTSHIFT,KEY_D},
+	{F_EXIT, "Выход",KEY_ESC},
+
+	{-1,"",-1}
+};
+
+int GetFunctionalKeyScan(int _ID_)
+{
+	for(int i=0; ;i++)
+	{
+		int ID=functional_keys[i].ID;
+
+		if (ID==-1) return 0;
+
+		if (ID==_ID_)
+		{
+			return functional_keys[i].ScanCode;
+		}
+	}
+}
+int GetFunctionalKeyScan2(int _ID_)
+{
+	for(int i=0; ;i++)
+	{
+		int ID=functional_keys[i].ID;
+
+		if (ID==-1) return 0;
+
+		if (ID==_ID_)
+		{
+			return functional_keys[i].ScanCode2;
+		}
+	}
+}
+
+int KeybFunctional(int ID)
+{
+	int scan=GetFunctionalKeyScan(ID);
+	if (scan==0) return 0;
+	int scan2=GetFunctionalKeyScan2(ID);
+	if (scan2==0) return Keyb[scan];
+
+	return Keyb[scan] && Keyb[scan2];
+}
+
+void KeybFunctionalClear(int ID)
+{
+	int scan=GetFunctionalKeyScan(ID);
+	if (scan==0) return;
+	Keyb.Set(scan,0);
+}
+
+extern SOUND Sound;
+
+void ShowHelpPage()
+{
+	scr.clear();
+	scr.x=0;
+	scr.y=0;
+	for(int i=0; ;i++)
+	{
+		if (functional_keys[i].ID==-1) break;
+		scr<<KEYBOARD::KEY[functional_keys[i].ScanCode];
+		if(functional_keys[i].ScanCode2)
+		{
+	        scr<<"+"<<KEYBOARD::KEY[functional_keys[i].ScanCode2];
+		}
+		scr<<" "<<functional_keys[i].help;
+		scr<<"\n";
+	}
+	scr.update();
+}
+
+
+extern unsigned long wait_flag1;
+extern unsigned long wait_flag2;
+extern int StepRunLX;
+
+extern int BigSymScale;
+void DrawRunLine(int);
+
+extern char *RunLine1;
+extern char *RunLine2;
+extern char *RunLine3;
+extern int text_loop;
+
+static int counter=0;
+const int SOUND_LEN=640;
+
+static unsigned char SOUND_BUF1[SOUND_LEN];
+static unsigned char SOUND_BUF2[SOUND_LEN];
+short IsPlay1=1;
+short IsPlay2=1;
+SNDSTRUC snd1;
+SNDSTRUC snd2;
+
+const double scale=pow(2.0,1/12.0);
+const double scale_24=pow(2.0,1/24.0);
+
+extern "C" extern short far * cdecl far PendingAddress(void);
+extern "C" extern short	cdecl far AudioPendingStatus(void);
+extern "C" short	cdecl far PostAudioPending(SNDSTRUC far *sndplay);
+extern "C" short cdecl far  DigPlay(SNDSTRUC far *sndplay); // 688h -> Play 8 bit digitized sound.
+extern "C" short cdecl far SetBackFillMode(short mode); // Turn DMA backfill mode on/off, return code
+extern "C"    unsigned short cdecl far ReportDMAC(void); // Report current DMA counter.
+
+//данные для синтезатора
+struct RECORD_DATA
+{
+	unsigned long Time;	//время события
+	char Note;	//относительный номер тона
+	char Stroy;	//строй (натуральный,равномерный)
+	float StartVolume;  //начальная громкость (0..127)
+	float Decrement; //относительная скорость убывания амплитуды (зависит от размера буфера)
+	float Freq;	//абсолютная частота тона
+};
+
+struct RECORD_KEY
+{
+	unsigned long Time;
+	char Scan;
+	char Press;
+};
+
+const int MAX_REC=2048;
+int real_rec=0;
+RECORD_KEY record[MAX_REC];
+
+struct MUSIC_KEY
+{
+	char Scan;	//скан-код клавише
+	char Note;	//номер ноты (номер полутона)
+	float Volume;	//играет
+	float VolumeDecrement;	//скорость убывания
+	float Freq;	//частота
+	char Press;	//было ли нажатие
+	//MUSIC_KEY()
+	//{
+	//	//Press=0;
+	//}
+};
+
+char BaseFreqChange=0;
+
+int mode_play=0;
+int mode_rec=0;
+int play_counter=0;
+
+const int MAX_KEY=29;
+
+//1-3-6-8-10
+MUSIC_KEY table0[MAX_KEY]=
+{
+					{KEY_LQUOTE,0,0,0,0},
+					{KEY_1,2,0,0,0},
+					{KEY_2,4,0,0,0},
+					{KEY_3,5,0,0,0},
+					{KEY_4,7,0,0,0},
+					{KEY_5,9,0,0,0},
+					{KEY_6,11,0,0,0},
+					{KEY_7,0+12,0,0,0},
+					{KEY_8,2+12,0,0,0},
+					{KEY_9,4+12,0,0,0},
+					{KEY_0,5+12,0,0,0},
+					{12,   7+12,0,0,0},
+					{13,   9+12,0,0,0},
+				  {0x20+11,11+12,0,0,0},
+				  {14,     0+24,0,0,0},
+				  {KEY_INSERT,     2+24,0,0,0},
+				  {KEY_HOME,     4+24,0,0,0},
+				  {KEY_PAGEUP,     5+24,0,0,0},
+				  {KEY_NUMLOCK,     7+24,0,0,0},
+				  {KEY_PADDIV,     9+24,0,0,0},
+				  {KEY_PADMUL,     11+24,0,0,0},
+				  {KEY_TAB,     0+36,0,0,0},
+				  {KEY_Q,     2+36,0,0,0},
+				  {KEY_W,     4+36,0,0,0},
+				  {KEY_E,     5+36,0,0,0},
+
+				  {KEY_CAPSLOCK, 127,0,0,0},
+				  {KEY_LEFTSHIFT,127,0,0,0},
+
+				  {KEY_ENTER,     127,0,0,0}
+};
+
+
+MUSIC_KEY table1[MAX_KEY]=
+{
+					{KEY_LQUOTE,1,0,0,0},
+					{KEY_1,3,0,0,0},
+					{KEY_2,6,0,0,0},
+					{KEY_3,8,0,0,0},
+					{KEY_4,10,0,0,0},
+					{KEY_5,1+12,0,0,0},
+					{KEY_6,3+12,0,0,0},
+					{KEY_7,6+12,0,0,0},
+					{KEY_8,8+12,0,0,0},
+					{KEY_9,10+12,0,0,0},
+					{KEY_0,1+12*2,0,0,0},
+					{12,   3+12*2,0,0,0},
+					{13,   6+12*2,0,0,0},
+				  {0x20+11,8+12*2,0,0,0},
+				  {14,     10+12*2,0,0,0},
+				  {KEY_INSERT,     1+12*3,0,0,0},
+				  {KEY_HOME,     3+12*3,0,0,0},
+				  {KEY_PAGEUP,     6+12*3,0,0,0},
+				  {KEY_NUMLOCK,     8+12*3,0,0,0},
+				  {KEY_PADDIV,     10+12*3,0,0,0},
+				  {KEY_PADMUL,     1+12*4,0,0,0},
+				  {KEY_TAB,     3+12*4,0,0,0},
+				  {KEY_Q,     6+12*4,0,0,0},
+				  {KEY_W,     8+12*4,0,0,0},
+				  {KEY_E,     10+12*4,0,0,0},
+
+				  {KEY_CAPSLOCK, 127,0,0,0},
+				  {KEY_LEFTSHIFT,127,0,0,0},
+
+				  {KEY_ENTER,     127,0,0,0}
+};
+
+MUSIC_KEY table2[MAX_KEY]=
+{
+					{KEY_LQUOTE,0,0,0,0},
+					{KEY_1,1,0,0,0},
+					{KEY_2,2,0,0,0},
+					{KEY_3,3,0,0,0},
+					{KEY_4,4,0,0,0},
+					{KEY_5,5,0,0,0},
+					{KEY_6,6,0,0,0},
+					{KEY_7,7,0,0,0},
+					{KEY_8,8,0,0,0},
+					{KEY_9,9,0,0,0},
+					{KEY_0,10,0,0,0},
+					{12,   11,0,0,0},
+					{13,   12,0,0,0},
+				  {0x20+11,13,0,0,0},
+				  {14,     14,0,0,0},
+				  {KEY_INSERT,     15,0,0,0},
+				  {KEY_HOME,     16,0,0,0},
+				  {KEY_PAGEUP,     17,0,0,0},
+				  {KEY_NUMLOCK,     18,0,0,0},
+				  {KEY_PADDIV,     19,0,0,0},
+				  {KEY_PADMUL,     20,0,0,0},
+				  {KEY_TAB,     21,0,0,0},
+				  {KEY_Q,     22,0,0,0},
+				  {KEY_W,     23,0,0,0},
+				  {KEY_E,     24,0,0,0},
+
+				  {KEY_CAPSLOCK, 127,0,0,0},
+				  {KEY_LEFTSHIFT,127,0,0,0},
+
+				  {KEY_ENTER,     127,0,0,0}
+};
+static MUSIC_KEY *table=table2;
+
+void PlayFreq(int freq, int ampl, int )
+{
+	int indx=rand()%10;
+	table[indx].Freq=freq;
+	table[indx].Volume=ampl;
+	table[indx].VolumeDecrement=0.004;
+}
+
+MUSIC_KEY old_keys[MAX_KEY];
+static int trap=390;
+
+void Draw_Clock()
+{
+		double PI=3.1415926;
+
+		double R=200/2;
+
+		int xc=320/2, yc=200/2-40;
+
+		static double angle=0;
+
+		int OldBigSymScale=BigSymScale;
+
+		static sec_start=0;
+
+		unsigned char hour,min,sec;
+
+		GetRealTimeClock(hour, min, sec);
+		sec_start=sec;
+
+		//char draw_clock=0;
+		static double Speed=1;
+		static double SpeedAdd=0.01;
+
+		for(double a=0; a>-2*PI*12000; a-=2*PI/70*Speed)
+		{
+
+			int digit=-1;
+
+			int _clr_=0;
+
+				static double spd=0.0001;
+				static double speed_bukve=0.0001;
+				//static double speed_bukve_add=0.00001;
+
+
+			for(double b=0; b>=-2*PI; b-=2*PI/12)
+			{
+				digit++;
+
+				//double R=64*sin(angle);
+
+				if (Keyb[KEY_SPACE])
+				{
+					static int old_angle;
+
+					static int sav;
+					angle=old_angle;
+					old_angle=sav;
+				}
+
+				angle+=0.0001;
+				angle+=0.0000001;
+				angle=spd;
+
+				spd+=speed_bukve;
+
+				/*if (Keyb[KEY_A])
+				{
+					Keyb.Set(KEY_A,0);
+					speed_bukve+=speed_bukve_add;
+				}
+
+				if (Keyb[KEY_S])
+				{
+					Keyb.Set(KEY_S,0);
+					speed_bukve-=speed_bukve_add;
+				}
+				*/
+
+				R=64;
+				scr.x=xc + R*sin(b*angle + PI);//+spd);
+				scr.y=yc + R*cos(b*angle + PI);//+spd);
+
+				int dig=digit;
+				if (digit==0) dig=12;
+
+				//scr<<dig;
+
+				char d[16];
+				sprintf(d, "%i", dig);
+
+				OldBigSymScale=BigSymScale;
+
+				static int BigSymSc=1;
+
+				if (Keyb[KEY_PADADD])
+				{
+					BigSymSc++;
+					Keyb.Set(KEY_PADADD,0);
+				}
+
+				if (Keyb[KEY_PADSUB])
+				{
+					BigSymSc--;
+					if (BigSymSc<1) BigSymSc=1;
+					Keyb.Set(KEY_PADSUB,0);
+				}
+
+
+				BigSymScale=BigSymSc;
+
+				scr.color=_clr_;
+
+				_clr_++;
+
+				for(int i=0; i<strlen(d); i++)
+				scr.putBigSym(d[i], _clr_,7);
+
+				BigSymScale=OldBigSymScale;
+			}
+
+
+			//static char rd=0,gr=0,bl=0;
+			//int rd1=rd, rd2=gr, rd3=bl;
+
+			//for(int g=0; g<12; g++)
+			//{
+			//if (g&1) rd2=0;
+			//else if (g&2) rd3=0;
+			//else if (g&4) rd1=0;
+
+			{
+				//for(int i=1; i<=12; i++)
+				//{
+				//	int r=i,g=i,b=i;
+					//scr.SetColorRegister(i, r,g,b);
+				//}
+			}
+
+			//rd++;
+			//gr++;
+			//bl++;
+
+			unsigned char hour,min,sec;
+			GetRealTimeClock(hour, min, sec);
+
+			char txt[12]={0};
+			sprintf(txt,"%02i:%02i:%02i", int(hour), int(min),int(sec));
+
+			scr.x=40;
+			scr.y=0;
+			scr.color=1;
+
+			//for(int v=0;v<strlen(txt);v++)
+			//scr.putBigSym(txt[v], 15,13);
+
+			char clr=15;
+
+			if (Keyb[KEY_C]) Speed+=SpeedAdd;
+			if (Keyb[KEY_V]) Speed-=SpeedAdd;
+
+
+			a=-Speed*2*PI*counter/70.0;
+			scr.line(xc,yc, xc + R*sin(a+PI), yc + R*cos(a+PI), clr);
+
+			int R_sec=60;
+
+			scr.line(xc,yc,
+			xc + R_sec*sin(PI + -2*PI*sec/60),// + -2*PI/60 * (counter)/70),
+			yc + R_sec*cos(PI + -2*PI*sec/60),// + -2*PI/60 * (counter)/70),
+			 clr-1);
+
+			int R_min=70;
+
+			double delta=2*PI/60/10;
+
+			scr.line(xc,yc, xc + R_min*sin(PI + -2*PI*min/60), yc + R_min*cos(PI + -2*PI*min/60), clr-5);
+			scr.line(xc,yc, xc + R_min*sin(PI + -2*PI*min/60 + delta), yc + R_min*cos(PI + -2*PI*min/60+delta), clr-5);
+			scr.line(xc,yc, xc + R_min*sin(PI + -2*PI*min/60 - delta), yc + R_min*cos(PI + -2*PI*min/60-delta), clr-5);
+
+			int R_hour=40;
+
+			if (hour>12) hour-=12;
+
+			scr.line(xc,yc, xc + R_hour*sin(PI + -2*PI*hour/12), yc + R_hour*cos(PI + -2*PI*hour/12), clr-3);
+
+			counter++;
+
+			if (counter>=70/Speed) counter=0;
+
+			BigSymScale=OldBigSymScale;
+			return;
+ 		}
+
+}
+
+void GenerateSound()
+{
+	int over_load=0;
+	SNDSTRUC *snd=&snd1;
+
+	#define PI 3.145926
+
+	float w=2.0*PI/FREQ;
+
+	static int last_t=0;
+
+	double freq;
+
+	static unsigned long I_CNT=0;
+
+	int dmac=SOUND_LEN+1-ReportDMAC();
+//				static int dmac=SOUND_LEN+1;//-ReportDMAC();
+	int start=0;
+
+	int len=SOUND_LEN/2;
+
+	static int buffer1_fill=0;
+	static int buffer2_fill=0;
+
+	static int i=0,p=0,j;
+
+
+	if ((dmac>len) && (dmac<(len+trap))) start=0;
+	else if (dmac>=0 && dmac<trap)start=SOUND_LEN/2;
+	else start=0;//32767;
+
+	if (start==0 && buffer1_fill) {return;}
+	else if(start==(SOUND_LEN/2) &&buffer2_fill){return;}
+
+	for(i=start,p=1; i<start+len; i++,p++)
+	{
+		static double t=0;
+
+		/*if (BaseFreqChange)
+		{
+			//int delta=t-last_value;
+			static double abs_delta=fabs(t-last_value);
+			if ( abs_delta>1 )
+			{
+				i=0;
+				p=0;
+				continue;
+			}
+			else BaseFreqChange=0;
+		}*/
+
+
+		for(j=0; j<MAX_KEY; j++)
+		{
+			if (table[j].Volume)
+			{
+				t+=table[j].Volume*
+							sin(w*I_CNT*table[j].Freq);
+
+				if ((table[j].Volume-=table[j].VolumeDecrement)<0)
+				{
+					table[j].Volume=0;
+				}
+			}
+		}
+
+		t*=Settings.Volume;
+
+		 I_CNT++;
+
+		 if (t>120)  {t=120; over_load++; }
+		 if (t<-120) {t=-120; over_load++;}
+		 snd->sound[i]=128+t;
+
+		 if (p<320)
+		 {
+			//scr.line(p-1,100+last_t*60/127,p,100+t*60/127,t);
+			last_t=t;
+		 }
+
+		 }
+
+		if (start==0) {buffer1_fill=1;buffer2_fill=0;}
+		else if(start==(SOUND_LEN/2)){buffer1_fill=0;buffer2_fill=1;}
+
+		if (over_load)
+		{
+			scr.color=12;
+			//scr.rectangle(0,200-25,320,5,12);
+			over_load=0;
+		}
+}
+
+void PutRec(int scan,unsigned long timer,int pr)
+{
+	//if(real_rec==0) Timer.Counter=0;
+	record[real_rec].Scan=scan;
+	record[real_rec].Press=pr;
+	record[real_rec].Time=timer;
+	real_rec++;
+	mode_play=1;
+	if (real_rec>=MAX_REC) real_rec=MAX_REC-1;
+
+}
+
+void StartRecord()
+{
+	real_rec=0;
+	mode_play=1;
+	play_counter=0;
+}
+void PutRecord(int scan,unsigned long timer)
+{
+	PutRec(scan,timer,1);
+	PutRec(scan,timer+2,0);
+}
+
+#define SOUND_MODULE_FULL 1
+#define SOUND_MODULE_SHORT 0
+void SoundModule(int param)
+{
+//	table=table2;
+
+	static int show_debug_info=0;
+	if(param==SOUND_MODULE_FULL)
+	{
+
+	if (KeybFunctional(F_SHOW_HIDE_DEBUG))
+	{
+		show_debug_info++;
+		KeybFunctionalClear(F_SHOW_HIDE_DEBUG);
+	}
+
+	if (KeybFunctional(F_CHANGE_TABLE))
+	{
+		if (table==table0)table=table1;
+		else if(table==table1)table=table2;
+		else table=table0;
+		KeybFunctionalClear(F_CHANGE_TABLE);
+	}
+	if (KeybFunctional(F_TIMER_SUB))
+	{
+    	if(Timer.Freq>2)
+		Timer.Restart(Timer.Freq-1);
+		play_counter=0;
+	}
+
+	if (KeybFunctional(F_TIMER_ADD))
+	{
+		Timer.Restart(Timer.Freq+1);
+		play_counter=0;
+	}
+
+	if (KeybFunctional(F_STOP))
+	{
+		mode_play=0;
+		for(int z=0;z<MAX_KEY;z++) table[z].Press=0;
+	}
+
+	if (KeybFunctional(F_START_RECORD) && !mode_play)
+	{
+		KeybFunctionalClear(F_START_RECORD);
+		if (mode_rec==1)
+		{
+			mode_rec=0;
+		}
+		else
+		{
+			mode_rec=1;
+			real_rec=0;
+			//Timer.Counter=0;
+		}
+	}
+
+	if (KeybFunctional(F_PLAY_RECORD) && !mode_play)
+	{
+		mode_play=1;
+		mode_rec=0;
+		play_counter=0;
+		Timer.Counter=0;
+	}
+	if (KeybFunctional(F_DECREMENT_SUB))
+	{
+		Settings.Decrement-=0.001;
+		if (Settings.Decrement<0) Settings.Decrement=0;
+
+	}
+
+	if (KeybFunctional(F_DECREMENT_ADD))
+	{
+		Settings.Decrement+=0.001;
+		if (Settings.Decrement>127) Settings.Decrement=127;
+
+	}
+
+
+	if (KeybFunctional(F_BASEFREQ_SUB))
+	{
+		Settings.BaseFreq-=1;
+		BaseFreqChange=1;
+	}
+
+	if (KeybFunctional(F_BASEFREQ_ADD))
+	{
+		Settings.BaseFreq+=1;
+		BaseFreqChange=1;
+	}
+
+
+	if (KeybFunctional(F_STROY))
+	{
+		KeybFunctionalClear(F_STROY);
+		Settings.Stroy++;
+		if (Settings.Stroy>=3) Settings.Stroy=0;
+
+	}
+
+	if (KeybFunctional(F_HELP))
+	{
+		ShowHelpPage();
+		Keyb.ReadScan();
+	}
+
+	if (KeybFunctional(F_VOLUME_ADD))
+	{
+		Settings.Volume+=0.01;
+		if (Settings.Volume>1) Settings.Volume=1;
+	}
+
+	if (KeybFunctional(F_VOLUME_SUB))
+	{
+		Settings.Volume-=0.01;
+		if (Settings.Volume<0) Settings.Volume=0;
+	}
+
+	}
+
+	{
+			if (mode_play)
+			{
+				if (record[play_counter].Time<Timer.Counter)
+				{
+					Keyb.Set(record[play_counter].Scan,record[play_counter].Press);
+					play_counter++;
+					if (play_counter>=real_rec)
+					{
+						play_counter=0;
+						mode_play=0;
+						//Timer.Counter=0;
+					}
+				}
+			}
+
+			for(int z=0; z<MAX_KEY; z++)
+			{
+				if (Keyb[table[z].Scan]) table[z].Press=TRUE;
+				else table[z].Press=FALSE;
+			}
+
+			//int KeysChange=0;
+			for(z=0; z<MAX_KEY;z++)
+			{
+				if (old_keys[z].Press!=table[z].Press)
+				{
+					//KeysChange=1;
+					old_keys[z]=table[z];
+
+					if (mode_rec)
+					{
+						if(real_rec==0) Timer.Counter=0;
+						record[real_rec].Scan=table[z].Scan;
+						record[real_rec].Press=table[z].Press;
+						record[real_rec].Time=Timer.Counter;
+						real_rec++;
+						if (real_rec>=MAX_REC) real_rec=MAX_REC-1;
+					}
+
+				}
+			}
+
+			for(int i=0; i<MAX_KEY;i++)
+			{
+				if (table[i].Press) table[i].Volume=127;
+
+				if (table[i].Press)
+				{
+					//if (mode_rec || mode_play)
+					//{
+					//	Keyb.Set(table[i].Scan,0);
+					//}
+					//if (real_rec==0) Timer.Counter=0;
+
+					table[i].VolumeDecrement=Settings.Decrement;
+					//Keyb.Set(table[i][0],0);
+					int NoteAdd=0;
+
+					if(Keyb[KEY_CAPSLOCK])
+					{
+						NoteAdd=+1;
+					}
+
+					if(Keyb[KEY_LEFTSHIFT])
+					{
+						NoteAdd=-1;
+					}
+
+					if (Settings.Stroy==STROY_PIANO)
+					{
+						table[i].Freq=
+						Settings.BaseFreq*pow(scale,table[i].Note+NoteAdd);
+					}
+
+					if(Settings.Stroy==STROY_NATURAL)
+					{
+						table[i].Freq=Settings.BaseFreq*(i+1);
+					}
+
+
+				   if (Settings.Stroy==STROY_24)
+				   {
+					table[i].Freq=Settings.BaseFreq*pow(scale_24,table[i].Note);
+				   }
+
+					if (table[i].Note==127) table[i].Freq=0;
+				}
+				else
+				{
+					if (table[i].Volume)
+					{
+						//if ( (table[i].Volume-=table[i].VolumeDecrement) <0)
+						//{
+						//	table[i].Volume=0;
+						//}
+					}
+
+				}
+
+				if(param==SOUND_MODULE_FULL)
+				{
+				int h=30;
+				int l=12;
+
+				int x=i*l;
+				int y=170-h;
+				scr.x=i*l;
+				scr.y=170-h-8;
+				scr<<i;
+
+				int clr=0;
+				if (Settings.Stroy>0 && table==table2)
+				{
+				int b=1;
+				if (Settings.Stroy==2) b=2;
+				int d=i%(12*b);
+				if (d==1*b || d==3*b || d==6*b || d== 8*b || d==10*b)
+				{
+					h-=2;
+					clr=1;
+				}
+				}
+
+				scr.rectangle(x,y,
+							  l-1,h,
+							  table[i].Volume+1+clr);
+				}
+			}
+
+
+
+			short far * pending=NULL;
+			pending=PendingAddress();
+			short pending_status=AudioPendingStatus();
+
+			if(param==SOUND_MODULE_FULL)
+			{
+			scr.color=15;
+			if(show_debug_info&1)
+			{
+			scr.x=0;
+			scr.y=0;
+			scr.color=2;
+			scr<<"Volume = "<<Settings.Volume<<"\n";
+			scr<<"Decrement = "<<Settings.Decrement<<"\n";
+			scr<<"Stroy = "<<Settings.Stroy;
+
+			if(Settings.Stroy==STROY_NATURAL)scr<<" natural";
+			if(Settings.Stroy==STROY_PIANO)scr<<" 12 tones";
+			if(Settings.Stroy==STROY_24)scr<<" 24 tones";
+
+			if (table==table0) scr<<" Table:Minor/Major\n";
+			if (table==table1) scr<<" Table:Pentatonic\n";
+			if (table==table2) scr<<" Table:Normal\n";
+
+			scr<<"\nBaseFreq = "<<Settings.BaseFreq<<"\n";
+			scr<<"Pending="<<(*pending)<<" "<<pending_status<<" "<<IsPlay1<<" "<<IsPlay2<<"   .";
+					scr<<"\nDMAC="<<ReportDMAC()<<"\n";
+
+			scr<<"\nTRAP="<<trap<<"(Z--,X++)\n";
+			if (Keyb[KEY_Z]&&trap)trap--;
+			if(Keyb[KEY_X])trap++;
+			scr<<"FREQ="<<FREQ<<"\n";
+
+			scr<<"\nSOUND_LEN="<<int(SOUND_LEN)<<"\n";
+			scr<<"T.C="<<Timer.Counter<<"\n"<<"T.F="<<Timer.Freq<<"\n";
+
+			}
+
+			if (mode_rec)
+			{
+				if ((Timer.Counter&100)<50)
+				{
+					scr.color=12;
+					scr<<"\nRECORD ";
+					if(real_rec==0) scr<<" WAIT";
+					else scr<<Timer.Counter<<" "<<real_rec;
+				}
+			}
+
+			if (mode_play)
+			{
+				if ((Timer.Counter&100)<50)
+				{
+					scr.color=13;
+					scr<<"\nPLAY "<<Timer.Counter<<" "<<play_counter;
+				}
+			}
+
+			}
+
+			snd1.sound=SOUND_BUF1;
+			snd1.sndlen=SOUND_LEN;
+			snd1.IsPlaying=&IsPlay1;
+			snd1.frequency=FREQ;
+
+			static int first=0;
+			if (!first)
+			{
+				first=1;
+				for(int i=0; i<SOUND_LEN;i++)
+				{
+					SOUND_BUF1[i]=127;
+				}
+
+				SetBackFillMode(1);
+				PostAudioPending(&snd1);
+				//PostAudioPending(&snd2);
+				//DigPlay(&snd1);
+			}
+
+			GenerateSound();
+			}
+}
+
+
+extern long RunLX;
+int mode=0;
+int MODE_PAUSE=1;
+int MODE_READY_PAUSE=2;
+//void DrawBMP(int start_y, int hei);
+
+void TextEditor();
+int TetrisStart()
+{
+	StepRunLX=Settings.StepRunLX;
+
+	scr.clear();
+	scr.StepX=6;
+
+	int flip=0;
+	int drop_count=0;
+
+	for(int i=0; i<256; i++)
+	{
+		scr.GetColorRegister(i, &r[i],&g[i],&b[i]);
+	}
+
+	int MusicNumber=2;
+
+//	music(2);
+
+	//запускаем таймер на частоту
+	Timer.Restart(100);	//100 Герц
+
+rest:
+//	char name[]="bmp\\n1.bmp";
+//	if (rand()%2) name[5]++;
+//	LoadBMP320x200x256(name);
+//	DrawBMPFast();
+//	scr.update();
+//int need_zastavka=FALSE;
+//	for(int a=0; a<1; a++)
+/*	if (need_zastavka)
+	for(int i=200; i>=0; i--)
+	{
+		//scr.DecrementPalette();
+		//scr.DecrementPalette();
+		//scr.DecrementPalette();
+		//DrawBMP(i,200-i);
+		scr.wait();
+		scr.update();
+		if (Keyb[KEY_LEFTCTRL]) break;
+	}
+*/
+//	LoadBMP320x200x256(name);
+//	DrawBMPFast();
+
+	scr.SetColorRegister(15, 255,255,255);
+
+	//unsigned long w_f1=0,w_f2=0;
+
+	int need_wait=1;
+	int Kadr=0;
+	int Kadr_Sec=0;
+	int show_debug=0;
+	int music_loop=1;
+	int background=0;
+	int back=0;
+	int front=63;
+
+	MidiStop();
+	music(MusicNumber);
+
+	do {
+
+	Kadr++;
+
+	scr.bkcolor=0;
+
+/*	if (Timer.Counter >= Timer.Freq)
+	{
+		Kadr_Sec=Kadr;
+		Kadr=0;
+		Timer.Counter=0;
+	}
+*/
+
+	static int pause=0;
+
+	/*if (Keyb[KEY_Z])
+	{
+		Keyb.Set(KEY_Z,0);
+		MusicNumber--;
+		if (MusicNumber<=0) MusicNumber=0;
+
+		MidiStop();
+		music(MusicNumber);
+	}
+
+	if (Keyb[KEY_X])
+	{
+		Keyb.Set(KEY_X,0);
+		MusicNumber++;
+		if (MusicNumber>=MAX_MUSIC_NUMBER) MusicNumber=MAX_MUSIC_NUMBER;
+		MidiStop();
+		music(MusicNumber);
+	}*/
+
+	if (Keyb[KEY_LEFTCTRL])
+	{
+	if (Keyb[KEY_SPACE]) { Keyb.Set(KEY_SPACE,0); pause^=1;}
+//	if (Keyb[KEY_ENTER]) { Keyb.Set(KEY_ENTER,0); background++; }
+	//if (Keyb[KEY_F1]) show_help();
+	if (Keyb[KEY_Y]) { show_debug^=1; Keyb.Set(KEY_Y,0); }
+	if (Keyb[KEY_E]) need_wait^=1, Keyb.Set(KEY_E,0);
+	if (Keyb[KEY_U]) music_loop^=1, Keyb.Set(KEY_U,0);
+	if (Keyb[KEY_M]) { drop_count=0; wait_flag1=0; wait_flag2=0;}
+	if (Keyb[KEY_1] && (back>0)) back--;
+	if (Keyb[KEY_2] && (back<63)) back++;
+	if (Keyb[KEY_3] && (front>0)) front--;
+	if (Keyb[KEY_4] && (front<63)) front++;
+	if (Keyb[KEY_LEFTSHIFT] && Keyb[KEY_F]) {flip^=1, Keyb.Set(KEY_F,0);}
+	if (Keyb[KEY_R]) goto rest;
+	if (Keyb[KEY_P]) { mode=MODE_READY_PAUSE; Keyb.Set(KEY_P,0); }
+	}
+	if (Keyb[KEY_ESC]) break;
+	if (Keyb[KEY_LEFTSHIFT] && Keyb[KEY_ESC]) return 0;
+
+	if (StepRunLX>20) StepRunLX=20;
+
+	if (background & 1) {
+	//DrawBMPFast();
+	scr.color=15; }
+	else
+	{
+		scr.SetColorRegister(16,back,back,back);
+		scr.rectangle(0,0,320,200,16);
+		scr.SetColorRegister(1,front,front,front);
+		scr.color=1;
+	}
+
+	//if (!pause)
+
+	//w_f1=wait_flag1;
+	//w_f2=wait_flag2;
+
+	if (show_debug)
+	{
+		scr.x=0;
+		scr.y=6*7;
+		scr.SetColorRegister(26,63,63,63);
+		scr.color=26;
+//		scr<<w_f1<<"\n";
+//		scr<<w_f2<<"\n";
+		scr<<"drop="<<drop_count<<"\n";
+		scr<<"SRLX="<<int(StepRunLX)<<"\n";
+		scr<<"T.C="<<Timer.Counter<<"\n"<<"T.F="<<Timer.Freq<<"\n";
+		scr<<"Kadr="<<Kadr<<"\n";
+		scr<<"KadrS="<<Kadr_Sec<<"\n";
+		scr<<"need_wait="<<need_wait<<"\n";
+		scr<<"music_loop="<<music_loop<<"\n";
+		scr<<"text_loop="<<text_loop<<"\n";
+		scr<<"mode=";
+		if (mode==MODE_PAUSE) scr<<"MODE_PAUSE";
+		if (mode==MODE_READY_PAUSE) scr<<"MODE_READY_PAUSE";
+		else scr<<mode;
+
+		scr<<"\n";
+	}
+
+	if (wait_flag2 > 20000)
+	{
+		drop_count++;
+		if (mode==MODE_READY_PAUSE)
+		{
+			mode=MODE_PAUSE;
+			scr<<"wait_flag2="<<wait_flag2<<"\n";
+		}
+	}
+
+	wait_flag1=0;
+	wait_flag2=0;
+
+
+	if (flip) scr.flip_double_buffer();
+
+	if (mode==MODE_PAUSE)
+	{
+		Keyb.ReadScan();
+		mode=0;
+	}
+
+	if ( (SequenceStatus() != SEQ_PLAYING) && music_loop)
+	{
+		music(0,0);
+	}
+
+	if (pause)
+	{
+		StepRunLX=0;
+	}
+
+	//scr.x=0;
+	//scr.y=98;
+	//scr<<"music="<<MusicNumber;
+
+	SoundModule(1);
+	scr.color=15;
+	static counter222=0;
+	if( counter222++==128)
+	{
+    	ifl.seekg(0);
+		Keyb.Set(KEY_L,1);
+	}
+    Draw_Clock();
+	DrawRunLine(200-BigSymScale*8);
+
+	if (Keyb[KEY_L]) TextEditor();
+
+	if (need_wait) scr.wait();
+
+	scr.update();
+
+
+	} while (1);
+
+	/*for(int i=0; i<20; i++)
+	{
+		scr.DecrementPalette();
+		scr.DecrementPalette();
+		scr.DecrementPalette();
+
+		scr.wait();
+	}*/
+
+	//scr.clear();
+	//scr.update();
+
+	for(i=0; i<256; i++)
+	{
+		scr.SetColorRegister(i, r[i],g[i],b[i]);
+	}
+
+//	Msg("  ЗАГРУЗКА, ПОЖАЛУЙСТА ПОДОЖДИТЕ ...  ",1);
+
+//	for(int vc=0; vc<60; vc++) scr.wait();
+
+	//Msg("ПОЗДРАВЛЯЮ ВСЕХ СВОИХ ДРУЗЕЙ С РОЖДЕСТВОМ",1);
+
+	return 1;
+}
+
+
+
+void show_help()
+{
+		scr.clear();
+
+		//scr.rectangle(0,0,320,200,9);
+		scr.color=15;
+		scr.StepX=6;
+		char *hlp="<F1> помощь\n"
+		"<KEY_LEFT>, <KEY_RIGHT> изменение скорости\n"
+		"<E> ждать обратного хода луча\n"
+		"<R> перезапуск\n"
+		"<Y> отладоточная информация\n"
+		"<U> музыка один раз/повтор\n"
+		"<LEFTSHIFT><F> для зеркала\n"
+		"<PAGEUP><PAGEDOWN> изменение размера текста\n"
+		"<PAD0> начало файла \n"
+		"<PAD1> случайное место \n"
+		"<PAD7> фрагмент зациклить \n"
+		"<PAD6> следующая глава \n"
+		"<PAD8> вкл/выкл мерцание \n"
+		"<SHIFT><F> зеркально\n"
+		"<CTRL><F> поиск (shift - русский)\n"
+		"<CTRL><L> поиск дальше\n"
+		"<ESC> переход в тетрис\n"
+		"<F12> выход в ОС\n"
+		"<ENTER> смена вида\n"
+		"<SPACE> пауза\n"
+		;
+		scr.x=0;
+		scr.y=0;
+		scr<<hlp;
+		scr.update();
+		Keyb.ReadScan();
+}

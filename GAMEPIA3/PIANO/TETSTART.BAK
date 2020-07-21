@@ -1,0 +1,378 @@
+#include "debug.h"
+#include "screen.h"
+#include "timer.h"
+#include "keyboard.h"
+#include "sound.h"
+#include "digplay.h"
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+#include "settings.h"
+#include <fstream.h>
+
+#include <stdlib.h>
+#include "midpak2.h"
+
+
+//*********************************************************//
+//*********************************************************//
+//*********************************************************//
+
+void GetRealTimeClock(unsigned char &hour, unsigned char &min, unsigned char &sec);
+void music(int n, int seq=0);
+void DrawClock();
+void SoundModule(int param);
+void show_help();
+void DrawRunLine(int);
+
+//*********************************************************//
+//*********************************************************//
+//*********************************************************//
+
+int mode=0;
+int MODE_PAUSE=1;
+int MODE_READY_PAUSE=2;
+
+//*********************************************************//
+//*********************************************************//
+//*********************************************************//
+extern int text_loop;
+extern SETTINGS Settings;
+extern ifstream ifl;
+
+
+//*********************************************************//
+//*********************************************************//
+//*********************************************************//
+
+static int show_debug_info=0;
+
+
+//*********************************************************//
+//*********************************************************//
+//*********************************************************//
+
+static char r[256], g[256], b[256];
+
+void SavePalette()
+{
+	for(int i=0; i<256; i++)
+	{
+		scr.GetColorRegister(i, &r[i],&g[i],&b[i]);
+	}
+
+}
+//*********************************************************//
+//*********************************************************//
+//*********************************************************//
+
+void RestorePalette()
+{
+	for(int i=0; i<256; i++)
+	{
+		scr.SetColorRegister(i, r[i],g[i],b[i]);
+	}
+}
+
+//*********************************************************//
+//*********************************************************//
+//*********************************************************//
+
+extern long RunLX;
+extern unsigned long wait_flag1;
+extern unsigned long wait_flag2;
+extern int StepRunLX;
+extern int BigSymScale;
+
+
+//переназначение-клавиш
+//выбор готовой гаммы например только черные
+
+void TextEditor();
+
+//*********************************************************//
+//*********************************************************//
+//*********************************************************//
+
+int TetrisStart()
+{
+	StepRunLX=Settings.StepRunLX;
+
+	scr.clear();
+	scr.StepX=6;
+
+	int flip=0;
+	int drop_count=0;
+
+	SavePalette();
+
+
+	int MusicNumber=2;
+
+//	music(2);
+
+	//запускаем таймер на частоту
+	Timer.Restart(100);	//100 Герц
+
+rest:
+//	char name[]="bmp\\n1.bmp";
+//	if (rand()%2) name[5]++;
+//	LoadBMP320x200x256(name);
+//	DrawBMPFast();
+//	scr.update();
+//int need_zastavka=FALSE;
+//	for(int a=0; a<1; a++)
+/*	if (need_zastavka)
+	for(int i=200; i>=0; i--)
+	{
+		//scr.DecrementPalette();
+		//scr.DecrementPalette();
+		//scr.DecrementPalette();
+		//DrawBMP(i,200-i);
+		scr.wait();
+		scr.update();
+		if (Keyb[KEY_LEFTCTRL]) break;
+	}
+*/
+//	LoadBMP320x200x256(name);
+//	DrawBMPFast();
+
+	scr.SetColorRegister(15, 255,255,255);
+
+	//unsigned long w_f1=0,w_f2=0;
+
+	int need_wait=1;
+	int Kadr=0;
+	int Kadr_Sec=0;
+	int show_debug=0;
+	int music_loop=1;
+	int background=0;
+	int back=0;
+	int front=63;
+
+	MidiStop();
+	music(MusicNumber);
+
+	do {
+
+	Kadr++;
+
+	scr.bkcolor=0;
+
+/*	if (Timer.Counter >= Timer.Freq)
+	{
+		Kadr_Sec=Kadr;
+		Kadr=0;
+		Timer.Counter=0;
+	}
+*/
+
+	static int pause=0;
+
+	/*if (Keyb[KEY_Z])
+	{
+		Keyb.Set(KEY_Z,0);
+		MusicNumber--;
+		if (MusicNumber<=0) MusicNumber=0;
+
+		MidiStop();
+		music(MusicNumber);
+	}
+
+	if (Keyb[KEY_X])
+	{
+		Keyb.Set(KEY_X,0);
+		MusicNumber++;
+		if (MusicNumber>=MAX_MUSIC_NUMBER) MusicNumber=MAX_MUSIC_NUMBER;
+		MidiStop();
+		music(MusicNumber);
+	}*/
+
+	if (Keyb[KEY_LEFTCTRL])
+	{
+	if (Keyb[KEY_SPACE]) { Keyb.Set(KEY_SPACE,0); pause^=1;}
+//	if (Keyb[KEY_ENTER]) { Keyb.Set(KEY_ENTER,0); background++; }
+	if (Keyb[KEY_F1]) show_help();
+	if (Keyb[KEY_Y]) { show_debug^=1; Keyb.Set(KEY_Y,0); }
+	if (Keyb[KEY_E]) need_wait^=1, Keyb.Set(KEY_E,0);
+	if (Keyb[KEY_U]) music_loop^=1, Keyb.Set(KEY_U,0);
+	if (Keyb[KEY_M]) { drop_count=0; wait_flag1=0; wait_flag2=0;}
+	if (Keyb[KEY_1] && (back>0)) back--;
+	if (Keyb[KEY_2] && (back<63)) back++;
+	if (Keyb[KEY_3] && (front>0)) front--;
+	if (Keyb[KEY_4] && (front<63)) front++;
+	if (Keyb[KEY_LEFTSHIFT] && Keyb[KEY_F]) {flip^=1, Keyb.Set(KEY_F,0);}
+	if (Keyb[KEY_R]) goto rest;
+	if (Keyb[KEY_P]) { mode=MODE_READY_PAUSE; Keyb.Set(KEY_P,0); }
+	}
+
+	if (Keyb[KEY_ESC]) break;
+	if (Keyb[KEY_LEFTSHIFT] && Keyb[KEY_ESC]) return 0;
+
+	if (StepRunLX>20) StepRunLX=20;
+
+	if (background & 1) {
+	//DrawBMPFast();
+	scr.color=15; }
+	else
+	{
+		scr.SetColorRegister(16,back,back,back);
+		scr.rectangle(0,0,320,200,16);
+		scr.SetColorRegister(1,front,front,front);
+		scr.color=1;
+	}
+
+	//if (!pause)
+
+	//w_f1=wait_flag1;
+	//w_f2=wait_flag2;
+
+	if (show_debug)
+	{
+		scr.x=0;
+		scr.y=6*7;
+		scr.SetColorRegister(26,63,63,63);
+		scr.color=26;
+//		scr<<w_f1<<"\n";
+//		scr<<w_f2<<"\n";
+		scr<<"drop="<<drop_count<<"\n";
+		scr<<"SRLX="<<int(StepRunLX)<<"\n";
+		scr<<"T.C="<<Timer.Counter<<"\n"<<"T.F="<<Timer.Freq<<"\n";
+		scr<<"Kadr="<<Kadr<<"\n";
+		scr<<"KadrS="<<Kadr_Sec<<"\n";
+		scr<<"need_wait="<<need_wait<<"\n";
+		scr<<"music_loop="<<music_loop<<"\n";
+		scr<<"text_loop="<<text_loop<<"\n";
+		scr<<"mode=";
+		if (mode==MODE_PAUSE) scr<<"MODE_PAUSE";
+		if (mode==MODE_READY_PAUSE) scr<<"MODE_READY_PAUSE";
+		else scr<<mode;
+
+		scr<<"\n";
+	}
+
+	if (wait_flag2 > 20000)
+	{
+		drop_count++;
+		if (mode==MODE_READY_PAUSE)
+		{
+			mode=MODE_PAUSE;
+			scr<<"wait_flag2="<<wait_flag2<<"\n";
+		}
+	}
+
+	wait_flag1=0;
+	wait_flag2=0;
+
+
+	if (flip) scr.flip_double_buffer();
+
+	if (mode==MODE_PAUSE)
+	{
+		Keyb.ReadScan();
+		mode=0;
+	}
+
+	if ( (SequenceStatus() != SEQ_PLAYING) && music_loop)
+	{
+		music(0,0);
+	}
+
+	if (pause)
+	{
+		StepRunLX=0;
+	}
+
+	//scr.x=0;
+	//scr.y=98;
+	//scr<<"music="<<MusicNumber;
+
+	SoundModule(1);
+
+	scr.color=15;
+
+	//static counter222=0;
+	//if( counter222++==128)
+	//{
+	//	//ifl.seekg(0);
+	//	//Keyb.Set(KEY_L,1);
+	//}
+
+	DrawClock();
+
+	DrawRunLine(200-BigSymScale*8);
+
+	if (Keyb[KEY_L]) TextEditor();
+
+	if (need_wait) scr.wait();
+
+	scr.update();
+
+
+	} while (1);
+
+	/*for(int i=0; i<20; i++)
+	{
+		scr.DecrementPalette();
+		scr.DecrementPalette();
+		scr.DecrementPalette();
+
+		scr.wait();
+	}*/
+
+	//scr.clear();
+	//scr.update();
+
+	RestorePalette();
+
+//	Msg("  ЗАГРУЗКА, ПОЖАЛУЙСТА ПОДОЖДИТЕ ...  ",1);
+
+//	for(int vc=0; vc<60; vc++) scr.wait();
+
+	//Msg("ПОЗДРАВЛЯЮ ВСЕХ СВОИХ ДРУЗЕЙ С РОЖДЕСТВОМ",1);
+
+	return 1;
+}
+
+//*********************************************************//
+//*********************************************************//
+//*********************************************************//
+
+
+void show_help()
+{
+		scr.clear();
+
+		//scr.rectangle(0,0,320,200,9);
+		scr.color=15;
+		scr.StepX=6;
+		char *hlp="<F1> помощь\n"
+		"<KEY_LEFT>, <KEY_RIGHT> изменение скорости\n"
+		"<E> ждать обратного хода луча\n"
+		"<R> перезапуск\n"
+		"<Y> отладоточная информация\n"
+		"<U> музыка один раз/повтор\n"
+		"<LEFTSHIFT><F> для зеркала\n"
+		"<PAGEUP><PAGEDOWN> изменение размера текста\n"
+		"<PAD0> начало файла \n"
+		"<PAD1> случайное место \n"
+		"<PAD7> фрагмент зациклить \n"
+		"<PAD6> следующая глава \n"
+		"<PAD8> вкл/выкл мерцание \n"
+		"<SHIFT><F> зеркально\n"
+		"<CTRL><F> поиск (shift - русский)\n"
+		"<CTRL><L> поиск дальше\n"
+		"<ESC> переход в тетрис\n"
+		"<F12> выход в ОС\n"
+		"<ENTER> смена вида\n"
+		"<SPACE> пауза\n"
+		;
+		scr.x=0;
+		scr.y=0;
+		scr<<hlp;
+		scr.update();
+		Keyb.ReadScan();
+}
+//*********************************************************//
+//*********************************************************//
+//*********************************************************//

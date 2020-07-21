@@ -1,0 +1,7 @@
+
+ Start  Stop   Length Name               Class
+
+ 00000H 0026FH 00270H _TEXT              CODE
+
+Fatal: Cannot generate COM file : invalid initial entry point address
+

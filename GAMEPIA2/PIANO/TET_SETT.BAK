@@ -1,0 +1,225 @@
+#include <string.h>
+
+#include "FIGURE.H"
+#include "TETRIS.H"
+
+#include "SETTINGS.H"
+#include "SCREEN.H"
+
+#include "DEBUG.H"
+#include "SOUND.H"
+
+#include "KEYBOARD.H"
+
+#include "midpak2.h"
+#include "doscall2.h"
+#include "loader2.h"
+
+#include <fstream.h>
+
+extern KEYBOARD Keyb;
+
+extern TETRIS Tetris[2];
+
+int MsgText(char far *msg, char far * text1, char far * text2, int bool_init, int y_coor);
+
+extern SETTINGS Settings;
+
+void TETRIS::Settings1()
+{
+			scr.clear();
+
+			Settings.EnableSound=MsgText("Звук", "Выкл.", "Вкл.",Settings.EnableSound);
+
+			scr.clear();
+			Settings.EnableMusic=MsgText("Музыка", "Выкл.", "Вкл.",Settings.EnableMusic);
+			if (Settings.EnableMusic==0) MidiStop();
+
+			scr.clear();
+			Settings.ShowTableRecord=MsgText("Показывать табл. рекордов", "Нет", "Да", Settings.ShowTableRecord);
+
+			scr.clear();
+			Settings.ShowRunLine=MsgText("Бегущая строка", "Нет", "Да", Settings.ShowRunLine);
+
+			scr.clear();
+			Settings.ShowRealTime=MsgText("Часы реального времени", "Нет", "Да", Settings.ShowRealTime);
+
+			//MsgText2("Бегущая строка", "Да", "Нет", &Settings.ShowRunLine);
+
+			scr.clear();
+
+
+            //??????
+			//Msg(" Громкость музыки (0..99):     ",5);
+			int vol=MsgTextMinMaxValue("Громкость музыки", 0, 100, Settings.MusicVolume, 100);
+
+			Settings.MusicVolume=vol;
+			SetRelativeVolume(vol,0);
+
+			Settings.Save();
+
+			Keyb.Set(KEY_ENTER,0);
+}
+
+void TETRIS::Settings2()
+{
+
+			scr.clear();
+			Settings.EnableEffects=MsgText("Показывать эффекты ?", "Нет", "Да", Settings.EnableEffects);
+
+			scr.clear();
+			int nbr=MsgTextMinMaxValue("MinumumBrickCount", 1,40, Settings.MinimumBrickCount, 10);
+
+			Settings.MinimumBrickCount=nbr;
+
+			scr.clear();
+			if (MsgText("Изменить размеры Тетриса ?", "Нет", "Да", 0) == 1)
+			{
+			scr.clear();
+			Settings.BoxXSize=MsgTextMinMaxValue("Ширина ячейки тетриса", 2,9, Settings.BoxXSize, 40);
+			Settings.BoxYSize=MsgTextMinMaxValue("Высота ячейки тетриса", 2,9, Settings.BoxYSize, 60);
+			Settings.GlassLen=MsgTextMinMaxValue("Ширина стакана", 5,30, Settings.GlassLen, 80);
+			Settings.GlassHei=MsgTextMinMaxValue("Высота стакана", 5,30, Settings.GlassHei, 100);
+			Settings.BoxView=MsgTextMinMaxValue("Вид ячейки тетриса", 0,1, Settings.BoxView, 120);
+			Settings.GlassView=MsgTextMinMaxValue("Вид стакана тетриса", 0,1, Settings.GlassView, 140);
+
+			Tetris[0].Glass.BoxLen=Settings.BoxXSize;
+			Tetris[0].Glass.BoxHei=Settings.BoxYSize;
+
+			Tetris[1].Glass.BoxLen=Settings.BoxXSize;
+			Tetris[1].Glass.BoxHei=Settings.BoxYSize;
+
+			Tetris[0].Glass.Make(Settings.GlassLen, Settings.GlassHei);
+			Tetris[1].Glass.Make(Settings.GlassLen, Settings.GlassHei);
+
+
+			}
+
+			Settings.Save();
+
+}
+
+//загрузить из файла
+int	TETRIS::Load(char *fname)
+{
+	ifstream ifl;
+
+	//пытаемся открыть файл
+	ifl.open(fname, ios::binary);
+
+	//если нет
+	if (!ifl)
+	{
+		return 0;
+	}
+	else
+	{
+
+		//при загрузке!
+		//ВНИМАНИЕ! в GLASS - указатель
+		//ВНИМАНИЕ! в FIGURE - указатель
+
+		TETRIS * t = new TETRIS;
+
+		ifl.read((char*)t, sizeof(TETRIS));
+
+		Score=t->Score;
+		Lines=t->Lines;
+		//SetRecord,	//был ли установлен рекорд
+		Speed=t->Speed,		//скорость падения
+		relScore=t->relScore,	//относительные очки
+		GameMode=t->GameMode,	//режим игры
+		Up=t->Up,		//кнопка вверх
+		Down=t->Down,		//кнопка вниз
+		Left=t->Left,		//влево
+		Right=t->Right,		//вправо
+		PlayerNumber=t->PlayerNumber,	//номер игрока
+		Pause=t->Pause,		//пауза
+		LRup=t->LRup,
+
+		strcpy(PlayerName, t->PlayerName);
+
+
+		ifl.close();
+	}
+
+	return 1;
+}
+
+//сохранить в файл
+int	TETRIS::Save(char *fname)
+{
+	ofstream ofl;
+
+	//пытаемся создать файл
+	ofl.open(fname, ios::binary);
+	if (!ofl) return 0;
+
+	ofl.write((char*)this, sizeof(TETRIS));
+	ofl.close();
+
+	return 1;
+}
+				   
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
